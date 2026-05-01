@@ -487,22 +487,6 @@ pub struct Signature<'db> {
     pub(crate) return_ty: Type<'db>,
 }
 
-/// Whether one callable signature's parameters are compatible with another's.
-pub(crate) enum ParameterConsistency<'db> {
-    /// The parameters are compatible.
-    Consistent,
-    /// The parameters are incompatible, with context explaining the incompatibility.
-    Inconsistent(ErrorContextTree<'db>),
-}
-
-/// Whether one callable signature's return type is compatible with another's.
-pub(crate) enum ReturnTypeConsistency<'db> {
-    /// The return types are compatible.
-    Consistent,
-    /// The return types are incompatible, with context explaining the incompatibility.
-    Inconsistent(ErrorContextTree<'db>),
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct SignatureRelationKey<'db> {
     // Signature recursion for recursive protocols keeps revisiting the same method declarations
@@ -1091,90 +1075,6 @@ impl<'db> Signature<'db> {
         }
     }
 
-    pub(crate) fn is_non_generic(&self, db: &'db dyn Db) -> bool {
-        self.generic_context.is_none()
-            && self.parameters().iter().all(|parameter| {
-                !parameter
-                    .annotated_type()
-                    .has_typevar_or_typevar_instance(db)
-            })
-            && !self.return_ty.has_typevar_or_typevar_instance(db)
-    }
-
-    /// Return whether this non-generic implementation accepts the arguments of a non-generic
-    /// overload, and the relation error context if it does not.
-    ///
-    /// This is a deliberately narrow first pass for overload implementation consistency. Generic
-    /// signatures need additional type-variable-domain handling and should be left to the full
-    /// implementation.
-    pub(crate) fn non_generic_implementation_parameters_consistency_with(
-        &self,
-        db: &'db dyn Db,
-        overload: &Self,
-    ) -> ParameterConsistency<'db> {
-        debug_assert!(self.is_non_generic(db));
-        debug_assert!(overload.is_non_generic(db));
-
-        let implementation = self.clone().with_return_type(Type::unknown());
-        let overload = overload.clone().with_return_type(Type::unknown());
-        let constraints = ConstraintSetBuilder::new();
-        let relation_visitor = HasRelationToVisitor::default(&constraints);
-        let disjointness_visitor = IsDisjointVisitor::default(&constraints);
-        let signature_relation_visitor = SignatureRelationVisitor::default();
-        let materialization_visitor = ApplyTypeMappingVisitor::default();
-        let checker = TypeRelationChecker::constraint_set_assignability_with_context(
-            &constraints,
-            &relation_visitor,
-            &disjointness_visitor,
-            &signature_relation_visitor,
-            &materialization_visitor,
-        );
-
-        let is_consistent = checker
-            .check_signature_pair(db, &implementation, &overload)
-            .is_always_satisfied(db);
-
-        if is_consistent {
-            ParameterConsistency::Consistent
-        } else {
-            ParameterConsistency::Inconsistent(checker.into_error_context())
-        }
-    }
-
-    /// Return whether a non-generic overload return type is assignable to a non-generic
-    /// implementation return type, and the relation error context if it is not.
-    pub(crate) fn non_generic_implementation_return_type_consistency_with(
-        &self,
-        db: &'db dyn Db,
-        overload: &Self,
-    ) -> ReturnTypeConsistency<'db> {
-        debug_assert!(self.is_non_generic(db));
-        debug_assert!(overload.is_non_generic(db));
-
-        let constraints = ConstraintSetBuilder::new();
-        let relation_visitor = HasRelationToVisitor::default(&constraints);
-        let disjointness_visitor = IsDisjointVisitor::default(&constraints);
-        let signature_relation_visitor = SignatureRelationVisitor::default();
-        let materialization_visitor = ApplyTypeMappingVisitor::default();
-        let checker = TypeRelationChecker::assignability_with_context(
-            &constraints,
-            &relation_visitor,
-            &disjointness_visitor,
-            &signature_relation_visitor,
-            &materialization_visitor,
-        );
-
-        let is_consistent = checker
-            .check_type_pair(db, overload.return_ty, self.return_ty)
-            .is_always_satisfied(db);
-
-        if is_consistent {
-            ReturnTypeConsistency::Consistent
-        } else {
-            ReturnTypeConsistency::Inconsistent(checker.into_error_context())
-        }
-    }
-
     /// Return the type variables that can be inferred during implementation-consistency checks.
     ///
     /// Function-local type variables, including function-local `ParamSpec`s, are inferable.
@@ -1325,12 +1225,8 @@ impl<'db> Signature<'db> {
         );
         let (self_signature, other_signature);
         let (self_, other) = if normalize_implicit_receiver {
-            self_signature = self
-                .clone()
-                .with_first_parameter_type_and_positional_only(Type::unknown());
-            other_signature = other
-                .clone()
-                .with_first_parameter_type_and_positional_only(Type::unknown());
+            self_signature = self.clone().with_first_parameter_type(Type::unknown());
+            other_signature = other.clone().with_first_parameter_type(Type::unknown());
             (&self_signature, &other_signature)
         } else {
             (self, other)
@@ -1404,12 +1300,8 @@ impl<'db> Signature<'db> {
             .with_error_context();
             let (self_signature, overload_signature);
             let (self_, overload) = if normalize_implicit_receiver {
-                self_signature = self_
-                    .clone()
-                    .with_first_parameter_type_and_positional_only(Type::unknown());
-                overload_signature = overload
-                    .clone()
-                    .with_first_parameter_type_and_positional_only(Type::unknown());
+                self_signature = self_.clone().with_first_parameter_type(Type::unknown());
+                overload_signature = overload.clone().with_first_parameter_type(Type::unknown());
                 (&self_signature, &overload_signature)
             } else {
                 (&self_, &overload)
@@ -1824,12 +1716,8 @@ impl<'db> Signature<'db> {
         );
         let (self_signature, other_signature);
         let (self_, other) = if normalize_implicit_receiver {
-            self_signature = self
-                .clone()
-                .with_first_parameter_type_and_positional_only(Type::unknown());
-            other_signature = other
-                .clone()
-                .with_first_parameter_type_and_positional_only(Type::unknown());
+            self_signature = self.clone().with_first_parameter_type(Type::unknown());
+            other_signature = other.clone().with_first_parameter_type(Type::unknown());
             (&self_signature, &other_signature)
         } else {
             (self, other)
@@ -2012,10 +1900,10 @@ impl<'db> Signature<'db> {
             .count()
     }
 
-    /// Return a copy with the first parameter rewritten to a positional-only parameter of `ty`.
+    /// Return a copy with the first parameter rewritten to have type `ty`.
     ///
-    /// This normalizes implicit or gradual method receivers before comparing an overload with its
-    /// implementation.
+    /// This normalizes implicit or gradual method receiver types before comparing an overload with
+    /// its implementation while preserving the receiver's original call shape.
     ///
     /// ```python
     /// from typing import overload
@@ -2026,16 +1914,9 @@ impl<'db> Signature<'db> {
     ///     def f(self, x: object) -> object:
     ///         return x
     /// ```
-    fn with_first_parameter_type_and_positional_only(mut self, ty: Type<'db>) -> Self {
+    fn with_first_parameter_type(mut self, ty: Type<'db>) -> Self {
         if let Some(first) = self.parameters.value.first_mut() {
-            let mut normalized = first.clone().with_annotated_type(ty);
-            if let ParameterKind::PositionalOrKeyword { name, default_type } = normalized.kind {
-                normalized.kind = ParameterKind::PositionalOnly {
-                    name: Some(name),
-                    default_type,
-                };
-            }
-            *first = normalized;
+            *first = first.clone().with_annotated_type(ty);
         }
         self
     }
@@ -2329,17 +2210,33 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
                 }
 
                 (None, Some((target_tvar, target_return))) if source_overloads.len() > 1 => {
+                    // TODO: Ideally, the constraint solver should use the return type constraint
+                    // to remove unmatched overloads from the `ParamSpec` specialization instead
+                    // of filtering them here.
                     let lower = Type::Callable(CallableType::new(
                         db,
-                        CallableSignature::from_overloads(source_overloads.iter().map(
-                            |signature| {
-                                Signature::new_generic(
-                                    signature.generic_context,
-                                    signature.parameters().clone(),
-                                    Type::unknown(),
-                                )
-                            },
-                        )),
+                        CallableSignature::from_overloads(
+                            source_overloads
+                                .iter()
+                                .filter(|signature| {
+                                    !self
+                                        .without_context_collection(|| {
+                                            self.check_type_pair(
+                                                db,
+                                                signature.return_ty,
+                                                target_return,
+                                            )
+                                        })
+                                        .is_never_satisfied(db)
+                                })
+                                .map(|signature| {
+                                    Signature::new_generic(
+                                        signature.generic_context,
+                                        signature.parameters().clone(),
+                                        Type::unknown(),
+                                    )
+                                }),
+                        ),
                         CallableTypeKind::ParamSpecValue,
                     ));
                     let param_spec_matches = ConstraintSet::constrain_typevar(
@@ -3008,6 +2905,12 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
                 // self: callable without ParamSpec
                 // other: `P`
                 (None, Some(([], target_bound_typevar))) => {
+                    if self.relation.is_implementation_compatibility()
+                        && source.parameters.is_gradual()
+                    {
+                        return result;
+                    }
+
                     let lower = Type::Callable(CallableType::new(
                         db,
                         CallableSignature::single(Signature::new_generic(
@@ -3031,6 +2934,12 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
                 // self: callable without ParamSpec
                 // other: `Concatenate[<prefix_params>, P]`
                 (None, Some((target_prefix_params, target_bound_typevar))) => {
+                    if self.relation.is_implementation_compatibility()
+                        && source.parameters.is_gradual()
+                    {
+                        return result;
+                    }
+
                     // Loop over self parameters and target_prefix_params in a similar manner to the
                     // above loop
                     let mut parameters = ParametersZip {
@@ -3169,6 +3078,12 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
                 // self: `P`
                 // other: callable without ParamSpec
                 (Some(([], source_bound_typevar)), None) => {
+                    if self.relation.is_implementation_compatibility()
+                        && target.parameters.is_gradual()
+                    {
+                        return result;
+                    }
+
                     let upper = Type::Callable(CallableType::new(
                         db,
                         CallableSignature::single(Signature::new_generic(
@@ -3192,6 +3107,12 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
                 // self: `Concatenate[<prefix_params>, P]`
                 // other: callable without ParamSpec
                 (Some((source_prefix_params, source_bound_typevar)), None) => {
+                    if self.relation.is_implementation_compatibility()
+                        && target.parameters.is_gradual()
+                    {
+                        return result;
+                    }
+
                     let mut parameters = ParametersZip {
                         current_source: None,
                         current_target: None,

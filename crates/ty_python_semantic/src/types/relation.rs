@@ -728,46 +728,6 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
         }
     }
 
-    pub(super) fn constraint_set_assignability_with_context(
-        constraints: &'c ConstraintSetBuilder<'db>,
-        relation_visitor: &'a HasRelationToVisitor<'db, 'c>,
-        disjointness_visitor: &'a IsDisjointVisitor<'db, 'c>,
-        signature_relation_visitor: &'a SignatureRelationVisitor<'db>,
-        materialization_visitor: &'a ApplyTypeMappingVisitor<'db>,
-    ) -> Self {
-        Self {
-            constraints,
-            inferable: InferableTypeVars::None,
-            relation: TypeRelation::ConstraintSetAssignability,
-            context_tree: ErrorContextTree::enabled(),
-            given: ConstraintSet::from_bool(constraints, false),
-            relation_visitor,
-            disjointness_visitor,
-            signature_relation_visitor,
-            materialization_visitor,
-        }
-    }
-
-    pub(super) fn assignability_with_context(
-        constraints: &'c ConstraintSetBuilder<'db>,
-        relation_visitor: &'a HasRelationToVisitor<'db, 'c>,
-        disjointness_visitor: &'a IsDisjointVisitor<'db, 'c>,
-        signature_relation_visitor: &'a SignatureRelationVisitor<'db>,
-        materialization_visitor: &'a ApplyTypeMappingVisitor<'db>,
-    ) -> Self {
-        Self {
-            constraints,
-            inferable: InferableTypeVars::None,
-            relation: TypeRelation::Assignability,
-            context_tree: ErrorContextTree::enabled(),
-            given: ConstraintSet::from_bool(constraints, false),
-            relation_visitor,
-            disjointness_visitor,
-            signature_relation_visitor,
-            materialization_visitor,
-        }
-    }
-
     /// Create a relation checker for overload implementation parameter compatibility.
     ///
     /// The checker answers whether the implementation accepts every call accepted by an overload,
@@ -1423,25 +1383,6 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
                 let context_collection_enabled = self.is_context_collection_enabled();
 
                 let elements = union.elements(db);
-                if matches!(self.relation, TypeRelation::ConstraintSetAssignability)
-                    && !context_collection_enabled
-                    && elements.iter().any(|element| element.is_type_var())
-                {
-                    let non_bare_typevar_result = elements
-                        .iter()
-                        .filter(|element| !element.is_type_var())
-                        .when_any(db, self.constraints, |&elem_ty| {
-                            self.check_type_pair(db, source, elem_ty)
-                        });
-                    if !non_bare_typevar_result.is_never_satisfied(db) {
-                        return non_bare_typevar_result.or(
-                            db,
-                            self.constraints,
-                            is_new_type_of_union,
-                        );
-                    }
-                }
-
                 let result = elements
                     .iter()
                     .when_any(db, self.constraints, |&elem_ty| {

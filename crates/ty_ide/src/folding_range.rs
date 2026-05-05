@@ -12,6 +12,10 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::Db;
 
+const PARENTHESES: (TokenKind, TokenKind) = (TokenKind::Lpar, TokenKind::Rpar);
+const BRACKETS: (TokenKind, TokenKind) = (TokenKind::Lsqb, TokenKind::Rsqb);
+const BRACES: (TokenKind, TokenKind) = (TokenKind::Lbrace, TokenKind::Rbrace);
+
 /// The kind of a folding range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FoldingRangeKind {
@@ -106,6 +110,15 @@ struct ActiveBlockHeaderDelimiterRange<'a> {
     range: TextRange,
 }
 
+/// Determines how a particular range is folded.
+#[derive(Debug, Clone, Copy)]
+enum FoldStyle {
+    // Fold only the region inside the given opening and closing delimiter, excluding the delimiters themselves.
+    DelimitedRegion((TokenKind, TokenKind)),
+    // Fold an entire range regardless of its contents.
+    Everything,
+}
+
 impl<'a> FoldingRangeVisitor<'a> {
     fn intersects_range_filter(&self, range: TextRange) -> bool {
         self.range_filter
@@ -130,17 +143,28 @@ impl<'a> FoldingRangeVisitor<'a> {
         true
     }
 
-    /// Add the given expression folding range unless it's already covered by a block header fold.
-    fn add_expression_range(&mut self, range: TextRange) {
+    /// Add a folding range for a multi-line expression.
+    fn add_expression_range(&mut self, range: TextRange, style: FoldStyle) {
+        let folding_range = match style {
+            FoldStyle::DelimitedRegion((opening, closing)) => {
+                self.delimited_range(range, opening, closing)
+            }
+            FoldStyle::Everything => Some(range),
+        };
+
+        let Some(folding_range) = folding_range else {
+            return;
+        };
+
         if self
             .active_block_header_delimiter_ranges
             .iter()
-            .any(|header_range| header_range.range.intersect(range).is_some())
+            .any(|header_range| header_range.range.intersect(folding_range).is_some())
         {
             return;
         }
 
-        self.add_range(range);
+        self.add_range(folding_range);
     }
 
     fn is_multiline(&self, range: TextRange) -> bool {
@@ -361,6 +385,29 @@ impl<'a> FoldingRangeVisitor<'a> {
         }
     }
 
+    /// Returns the range inside the given opening and closing tokens, if they are present.
+    fn delimited_range(
+        &self,
+        range: TextRange,
+        opening: TokenKind,
+        closing: TokenKind,
+    ) -> Option<TextRange> {
+        let mut tokens = self
+            .tokens
+            .in_range(range)
+            .iter()
+            .filter(|token| !token.kind().is_trivia());
+
+        let opening_token = tokens.next()?;
+        let closing_token = tokens.next_back()?;
+
+        if opening_token.kind() == opening && closing_token.kind() == closing {
+            Some(TextRange::new(opening_token.end(), closing_token.start()))
+        } else {
+            None
+        }
+    }
+
     /// Adds folding ranges for the header and body of the given block.
     fn add_block_ranges<T: Ranged>(&mut self, node: AnyNodeRef<'a>, block: &[T]) {
         let Some(first_block_statement) = block.first() else {
@@ -536,55 +583,70 @@ impl<'a> SourceOrderVisitor<'a> for FoldingRangeVisitor<'a> {
             }
 
             // Multiline expressions
-            AnyNodeRef::ExprList(list) => {
-                self.add_expression_range(list.range());
+            AnyNodeRef::ExprList(_) | AnyNodeRef::ExprListComp(_) | AnyNodeRef::TypeParams(_) => {
+                self.add_expression_range(
+                    node.range(),
+                    FoldStyle::DelimitedRegion(BRACKETS),
+                );
             }
             AnyNodeRef::ExprTuple(tuple)
                 // Only fold parenthesized tuples.
                 if tuple.parenthesized => {
-                    self.add_expression_range(tuple.range());
+                    self.add_expression_range(
+                        node.range(),
+                        FoldStyle::DelimitedRegion(PARENTHESES),
+                    );
                 }
-            AnyNodeRef::ExprDict(dict) => {
-                self.add_expression_range(dict.range());
-            }
-            AnyNodeRef::ExprSet(set) => {
-                self.add_expression_range(set.range());
-            }
-            AnyNodeRef::ExprListComp(listcomp) => {
-                self.add_expression_range(listcomp.range());
-            }
-            AnyNodeRef::ExprSetComp(setcomp) => {
-                self.add_expression_range(setcomp.range());
-            }
-            AnyNodeRef::ExprDictComp(dictcomp) => {
-                self.add_expression_range(dictcomp.range());
+            AnyNodeRef::ExprDict(_)
+            | AnyNodeRef::ExprSet(_)
+            | AnyNodeRef::ExprSetComp(_)
+            | AnyNodeRef::ExprDictComp(_) => {
+                self.add_expression_range(
+                    node.range(),
+                    FoldStyle::DelimitedRegion(BRACES),
+                );
             }
             AnyNodeRef::ExprGenerator(generator) => {
-                self.add_expression_range(generator.range());
+                let fold_style = if generator.parenthesized {
+                    FoldStyle::DelimitedRegion(PARENTHESES)
+                } else {
+                    FoldStyle::Everything
+                };
+                self.add_expression_range(node.range(), fold_style);
+            }
+            AnyNodeRef::ExprSubscript(subscript) => {
+                let subscript_range = TextRange::new(subscript.value.end(), node.end());
+                let bracket_start = self.find_token_start(TokenKind::Lsqb, subscript_range);
+                if let Some(bracket_start) = bracket_start {
+                    self.add_expression_range(
+                        TextRange::new(bracket_start, node.end()),
+                        FoldStyle::DelimitedRegion(BRACKETS),
+                    );
+                }
             }
 
             // Function calls with arguments spanning multiple lines
             AnyNodeRef::ExprCall(call) => {
-                self.add_expression_range(call.range());
+                let arguments_range = call.arguments.range();
+                let has_argument_parentheses = self
+                    .delimited_range(arguments_range, TokenKind::Lpar, TokenKind::Rpar)
+                    .is_some();
+                if self.is_multiline(arguments_range) {
+                    self.add_expression_range(
+                        arguments_range,
+                        FoldStyle::DelimitedRegion(PARENTHESES),
+                    );
+                } else if has_argument_parentheses {
+                    self.add_expression_range(node.range(), FoldStyle::Everything);
+                }
             }
 
             // String and bytes literals
-            AnyNodeRef::ExprStringLiteral(string) => {
-                self.add_expression_range(string.range());
-            }
-            AnyNodeRef::ExprBytesLiteral(bytes) => {
-                self.add_expression_range(bytes.range());
-            }
-            AnyNodeRef::ExprFString(fstring) => {
-                self.add_expression_range(fstring.range());
-            }
-            AnyNodeRef::ExprTString(tstring) => {
-                self.add_expression_range(tstring.range());
-            }
-
-            // Type parameter lists
-            AnyNodeRef::TypeParams(params) => {
-                self.add_expression_range(params.range());
+            AnyNodeRef::ExprStringLiteral(_)
+            | AnyNodeRef::ExprBytesLiteral(_)
+            | AnyNodeRef::ExprFString(_)
+            | AnyNodeRef::ExprTString(_) => {
+                self.add_expression_range(node.range(), FoldStyle::Everything);
             }
 
             _ => {}

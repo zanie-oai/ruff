@@ -1648,28 +1648,290 @@ my_dict = {
 
         assert_snapshot!(test.folding_ranges(), @r#"
         info[folding-range]: Folding Range
-         --> main.py:2:11
+         --> main.py:2:12
           |
         2 |   my_list = [
-          |  ___________^
+          |  ____________^
         3 | |     1,
         4 | |     2,
         5 | |     3,
-        6 | | ]
-          | |_^
+          | |_______^
           |
 
         info[folding-range]: Folding Range
-          --> main.py:8:11
+          --> main.py:8:12
            |
          8 |   my_dict = {
-           |  ___________^
+           |  ____________^
          9 | |     "a": 1,
         10 | |     "b": 2,
-        11 | | }
-           | |_^
+           | |____________^
            |
         "#);
+    }
+
+    #[test]
+    fn test_folding_range_expression_delimiters() {
+        let test = CursorTest::builder()
+            .source(
+                "main.py",
+                r#"
+result = call(
+    first,
+    second,
+)
+
+my_set = {
+    "a",
+    "b",
+}
+
+my_tuple = (
+    first,
+    second,
+)
+
+my_generator = (
+    item
+    for item in items
+)
+
+my_list_comp = [
+    item
+    for item in items
+]
+
+my_set_comp = {
+    item
+    for item in items
+}
+
+my_dict_comp = {
+    key: value
+    for key, value in items
+}
+
+type Alias[
+    T,
+    U,
+] = tuple[T, U]
+<CURSOR>
+"#,
+            )
+            .build();
+
+        assert_snapshot!(test.folding_ranges(), @r#"
+        info[folding-range]: Folding Range
+         --> main.py:2:15
+          |
+        2 |   result = call(
+          |  _______________^
+        3 | |     first,
+        4 | |     second,
+          | |____________^
+          |
+
+        info[folding-range]: Folding Range
+         --> main.py:7:11
+          |
+        7 |   my_set = {
+          |  ___________^
+        8 | |     "a",
+        9 | |     "b",
+          | |_________^
+          |
+
+        info[folding-range]: Folding Range
+          --> main.py:12:13
+           |
+        12 |   my_tuple = (
+           |  _____________^
+        13 | |     first,
+        14 | |     second,
+           | |____________^
+           |
+
+        info[folding-range]: Folding Range
+          --> main.py:17:17
+           |
+        17 |   my_generator = (
+           |  _________________^
+        18 | |     item
+        19 | |     for item in items
+           | |______________________^
+           |
+
+        info[folding-range]: Folding Range
+          --> main.py:22:17
+           |
+        22 |   my_list_comp = [
+           |  _________________^
+        23 | |     item
+        24 | |     for item in items
+           | |______________________^
+           |
+
+        info[folding-range]: Folding Range
+          --> main.py:27:16
+           |
+        27 |   my_set_comp = {
+           |  ________________^
+        28 | |     item
+        29 | |     for item in items
+           | |______________________^
+           |
+
+        info[folding-range]: Folding Range
+          --> main.py:32:17
+           |
+        32 |   my_dict_comp = {
+           |  _________________^
+        33 | |     key: value
+        34 | |     for key, value in items
+           | |____________________________^
+           |
+
+        info[folding-range]: Folding Range
+          --> main.py:37:12
+           |
+        37 |   type Alias[
+           |  ____________^
+        38 | |     T,
+        39 | |     U,
+           | |_______^
+           |
+        "#);
+    }
+
+    #[test]
+    fn test_folding_range_incomplete_call() {
+        let test = CursorTest::builder()
+            .source("main.py", "foo(\n<CURSOR>")
+            .build();
+
+        assert_snapshot!(test.folding_ranges(), @"No folding ranges found");
+    }
+
+    #[test]
+    fn test_folding_range_multiline_subscript() {
+        let test = CursorTest::builder()
+            .source(
+                "main.py",
+                r#"
+subscript_call = some[
+    key
+](arg)
+
+nested_call = factory(
+    config
+)(arg)
+
+parenthesized_callee = (
+    factory
+)(arg)
+
+method_call = some[
+    key
+].method(arg)
+
+grouped_subscript = (data)[
+    key
+]
+
+standalone_subscript = some[
+    key
+]
+<CURSOR>
+"#,
+            )
+            .build();
+
+        assert_snapshot!(test.folding_ranges(), @"
+        info[folding-range]: Folding Range
+         --> main.py:2:18
+          |
+        2 |   subscript_call = some[
+          |  __________________^
+        3 | |     key
+        4 | | ](arg)
+          | |______^
+          |
+
+        info[folding-range]: Folding Range
+         --> main.py:2:23
+          |
+        2 |   subscript_call = some[
+          |  _______________________^
+        3 | |     key
+          | |________^
+          |
+
+        info[folding-range]: Folding Range
+         --> main.py:6:15
+          |
+        6 |   nested_call = factory(
+          |  _______________^
+        7 | |     config
+        8 | | )(arg)
+          | |______^
+          |
+
+        info[folding-range]: Folding Range
+         --> main.py:6:23
+          |
+        6 |   nested_call = factory(
+          |  _______________________^
+        7 | |     config
+          | |___________^
+          |
+
+        info[folding-range]: Folding Range
+          --> main.py:10:24
+           |
+        10 |   parenthesized_callee = (
+           |  ________________________^
+        11 | |     factory
+        12 | | )(arg)
+           | |______^
+           |
+
+        info[folding-range]: Folding Range
+          --> main.py:14:15
+           |
+        14 |   method_call = some[
+           |  _______________^
+        15 | |     key
+        16 | | ].method(arg)
+           | |_____________^
+           |
+
+        info[folding-range]: Folding Range
+          --> main.py:14:20
+           |
+        14 |   method_call = some[
+           |  ____________________^
+        15 | |     key
+           | |________^
+           |
+
+        info[folding-range]: Folding Range
+          --> main.py:18:28
+           |
+        18 |   grouped_subscript = (data)[
+           |  ____________________________^
+        19 | |     key
+           | |________^
+           |
+
+        info[folding-range]: Folding Range
+          --> main.py:22:29
+           |
+        22 |   standalone_subscript = some[
+           |  _____________________________^
+        23 | |     key
+           | |________^
+           |
+        ");
     }
 
     #[test]

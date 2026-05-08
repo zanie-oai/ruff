@@ -1546,9 +1546,7 @@ fn add_function_arg_completions<'db>(
 
     for sig in &sig_help.signatures {
         for p in &sig.parameters {
-            if p.is_positional_only
-                || p.is_variadic
-                || p.is_keyword_variadic
+            if !p.kind.can_complete_as_keyword_argument()
                 || !set_function_args.insert(p.name.as_str())
             {
                 continue;

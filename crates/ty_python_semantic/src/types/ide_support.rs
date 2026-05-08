@@ -594,14 +594,68 @@ pub struct CallSignatureParameter<'db> {
     /// Annotated type of the parameter after applying any inferred specialization.
     pub ty: Type<'db>,
 
-    /// True if the parameter is positional-only.
-    pub is_positional_only: bool,
+    /// The call binding behavior for this displayed parameter.
+    pub kind: CallSignatureParameterKind,
+}
 
-    /// True if the parameter can absorb arbitrarily many positional arguments.
-    pub is_variadic: bool,
+/// The call binding behavior for a displayed parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallSignatureParameterKind {
+    /// A parameter before `/`.
+    PositionalOnly,
+    /// A parameter that can be passed positionally or by keyword.
+    PositionalOrKeyword,
+    /// A `*args` parameter.
+    Variadic,
+    /// A keyword-only parameter after `*` or `*args`.
+    KeywordOnly,
+    /// A `**kwargs` parameter.
+    KeywordVariadic,
+    /// A synthetic parameter representing both `*args` and `**kwargs` for a `ParamSpec`.
+    VariadicKeyword,
+}
 
-    /// True if the parameter can absorb arbitrarily many keyword arguments.
-    pub is_keyword_variadic: bool,
+impl CallSignatureParameterKind {
+    fn from_parameter(parameter: &crate::types::signatures::Parameter) -> Self {
+        if parameter.is_positional_only() {
+            Self::PositionalOnly
+        } else if parameter.is_keyword_only() {
+            Self::KeywordOnly
+        } else if parameter.is_variadic() {
+            Self::Variadic
+        } else if parameter.is_keyword_variadic() {
+            Self::KeywordVariadic
+        } else {
+            Self::PositionalOrKeyword
+        }
+    }
+
+    pub const fn is_positional_only(self) -> bool {
+        matches!(self, Self::PositionalOnly)
+    }
+
+    pub const fn is_keyword_only(self) -> bool {
+        matches!(self, Self::KeywordOnly)
+    }
+
+    pub const fn is_variadic(self) -> bool {
+        matches!(self, Self::Variadic | Self::VariadicKeyword)
+    }
+
+    pub const fn is_keyword_variadic(self) -> bool {
+        matches!(self, Self::KeywordVariadic | Self::VariadicKeyword)
+    }
+
+    pub const fn is_any_variadic(self) -> bool {
+        matches!(
+            self,
+            Self::Variadic | Self::KeywordVariadic | Self::VariadicKeyword
+        )
+    }
+
+    pub const fn can_complete_as_keyword_argument(self) -> bool {
+        matches!(self, Self::PositionalOrKeyword | Self::KeywordOnly)
+    }
 }
 
 impl<'db> CallSignatureDetails<'db> {
@@ -689,9 +743,7 @@ fn displayed_parameters_for_signature<'db>(
                     label,
                     name,
                     ty: apply_specialization(parameter.annotated_type()),
-                    is_positional_only: parameter.is_positional_only(),
-                    is_variadic: parameter.is_variadic(),
-                    is_keyword_variadic: parameter.is_keyword_variadic(),
+                    kind: CallSignatureParameterKind::from_parameter(parameter),
                 });
             }
 
@@ -723,9 +775,7 @@ fn displayed_parameters_for_signature<'db>(
                     label,
                     name,
                     ty: Type::TypeVar(typevar),
-                    is_positional_only: false,
-                    is_variadic: true,
-                    is_keyword_variadic: true,
+                    kind: CallSignatureParameterKind::VariadicKeyword,
                 }],
                 vec![Some(0); parameters.len()],
             )

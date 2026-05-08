@@ -656,6 +656,16 @@ impl CallSignatureParameterKind {
     pub const fn can_complete_as_keyword_argument(self) -> bool {
         matches!(self, Self::PositionalOrKeyword | Self::KeywordOnly)
     }
+
+    pub const fn hover_label(self) -> &'static str {
+        match self {
+            Self::PositionalOnly => "positional-only parameter",
+            Self::PositionalOrKeyword => "parameter",
+            Self::Variadic | Self::VariadicKeyword => "variadic positional parameter",
+            Self::KeywordOnly => "keyword-only parameter",
+            Self::KeywordVariadic => "variadic keyword parameter",
+        }
+    }
 }
 
 impl<'db> CallSignatureDetails<'db> {
